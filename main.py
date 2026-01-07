@@ -2,6 +2,11 @@ import asyncio
 from datetime import datetime, date
 import logging
 import os
+import json
+
+if "GOOGLE_CREDENTIALS_JSON" in os.environ:
+    with open("credentials.json", "w", encoding="utf-8") as f:
+        f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -225,3 +230,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
