@@ -2,21 +2,15 @@ import asyncio
 from datetime import datetime, date
 import logging
 import os
-import json
 
-if "GOOGLE_CREDENTIALS_JSON" in os.environ:
-    with open("credentials.json", "w", encoding="utf-8") as f:
-        f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
-
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.utils.executor import start_webhook
 
 from dotenv import load_dotenv
-
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -32,6 +26,11 @@ SHEET_NAME = os.getenv("SHEET_NAME", "Лист1")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "credentials.json")
 ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "@makkk0657")
 CHECK_INTERVAL_MIN = int(os.getenv("CHECK_INTERVAL_MIN", "5"))
+
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # Например, https://your-app.onrender.com
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+PORT = int(os.environ.get("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 
@@ -97,10 +96,10 @@ class StartStates(StatesGroup):
     waiting_for_full_name = State()
 
 # -----------------------------
-# /start handler
+# Handlers
 # -----------------------------
 @dp.message(Command(commands=["start"]))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: types.Message, state: FSMContext):
     tg_id = message.from_user.id
     row = find_row_by_telegram_id(tg_id)
     
@@ -121,11 +120,8 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer("Здравствуйте! Пожалуйста, напишите своё имя и фамилию:")
     await state.set_state(StartStates.waiting_for_full_name)
 
-# -----------------------------
-# Обработка ввода имени и фамилии
-# -----------------------------
 @dp.message(StartStates.waiting_for_full_name)
-async def process_full_name(message: Message, state: FSMContext):
+async def process_full_name(message: types.Message, state: FSMContext):
     full_name = message.text.strip()
     tg_id = message.from_user.id
     username = message.from_user.username or ""
@@ -140,11 +136,8 @@ async def process_full_name(message: Message, state: FSMContext):
     )
     await state.clear()
 
-# -----------------------------
-# /check handler
-# -----------------------------
 @dp.message(Command(commands=["check"]))
-async def cmd_check(message: Message):
+async def cmd_check(message: types.Message):
     tg_id = message.from_user.id
     row = find_row_by_telegram_id(tg_id)
     if not row:
@@ -162,7 +155,6 @@ async def cmd_check(message: Message):
         return
 
     if expiry < date.today():
-        # удаляем пользователя
         try:
             await bot.ban_chat_member(CHAT_ID, tg_id)
             await asyncio.sleep(1)
@@ -178,9 +170,6 @@ async def cmd_check(message: Message):
     await send_invite_links(tg_id)
     await message.answer(f"Ваша подписка активна до {expiry.isoformat()}. Ссылки на чат и канал отправлены вам лично.")
 
-# -----------------------------
-# Функция для отправки одноразовых ссылок
-# -----------------------------
 async def send_invite_links(tg_id: int):
     try:
         chat_link = await bot.create_chat_invite_link(CHAT_ID, member_limit=1)
@@ -190,9 +179,6 @@ async def send_invite_links(tg_id: int):
     except Exception as e:
         logging.error(f"Ошибка при отправке ссылки {tg_id}: {e}")
 
-# -----------------------------
-# Фоновый воркер для удаления просроченных подписок
-# -----------------------------
 async def subscription_watcher():
     while True:
         all_values = worksheet.get_all_records()
@@ -222,12 +208,25 @@ async def subscription_watcher():
         await asyncio.sleep(CHECK_INTERVAL_MIN * 60)
 
 # -----------------------------
-# Запуск бота
+# Webhook startup/shutdown
 # -----------------------------
-async def main():
+async def on_startup(dp):
+    await bot.set_webhook(WEBHOOK_URL)
     asyncio.create_task(subscription_watcher())
-    await dp.start_polling(bot)
 
+async def on_shutdown(dp):
+    await bot.delete_webhook()
+
+# -----------------------------
+# Запуск через webhook
+# -----------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host="0.0.0.0",
+        port=PORT,
+    )
